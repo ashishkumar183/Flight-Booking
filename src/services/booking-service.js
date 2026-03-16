@@ -5,9 +5,10 @@ const { BookingRepository } = require('../repositories');
 const { ServerConfig } = require('../config');
 const db = require('../models');
 const AppError = require('../utils/errors/app-error');
+const {Enums} = require('../utils/common');
+const {CONFIRMED,CANCELLED,INITIATED,PENDING} = Enums.BOOKING_STATUS;
 
 const bookingRepository = new BookingRepository();
-
 
 async function createBooking(data) {
     console.log("Incoming data:", data);
@@ -59,6 +60,54 @@ async function createBooking(data) {
     }
 }
 
+async function makePayment(data){
+    const transaction = await db.sequelize.transaction();
+    try {
+        const bookingDetails = await bookingRepository.get(data.bookingId, transaction);
+
+        if(bookingDetails.status == CANCELLED){
+            throw new AppError(
+                'The booking has been cancelled. Cannot make payment for a cancelled booking.',
+                StatusCodes.BAD_REQUEST
+            );
+        }
+
+        const bookingTime = new Date(bookingDetails.createdAt);
+        const currentTime = new Date();
+        const timeDifference = (currentTime - bookingTime)
+        if(timeDifference > 10 * 60 * 1000){ // 10 minutes
+            await bookingRepository.update(data.bookingId, {status: CANCELLED}, transaction);
+            throw new AppError(
+                'The booking has been cancelled due to non-payment within the stipulated time.',
+                StatusCodes.BAD_REQUEST
+            );
+        }
+
+        if(bookingDetails.totalCost !== Number(data.totalCost)){
+            throw new AppError(
+                'The amount of payment is not correct',
+                StatusCodes.BAD_REQUEST
+            );
+        }
+        
+        if(bookingDetails.userId !== data.userId){
+            throw new AppError(
+                'User not authorized to make payment',
+                StatusCodes.UNAUTHORIZED
+            );
+        }
+        // We assume the payment is successful and update the booking status to CONFIRMED
+        const response = await bookingRepository.update(data.bookingId, {status: CONFIRMED}, transaction);
+        await transaction.commit();
+        return response;
+    } catch (error) {
+        await transaction.rollback();
+        throw error;
+    }       
+}
+
+
 module.exports = {
-    createBooking
+    createBooking,
+    makePayment
 };
