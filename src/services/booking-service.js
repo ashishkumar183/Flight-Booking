@@ -76,7 +76,7 @@ async function makePayment(data){
         const currentTime = new Date();
         const timeDifference = (currentTime - bookingTime)
         if(timeDifference > 10 * 60 * 1000){ // 10 minutes
-            await bookingRepository.update(data.bookingId, {status: CANCELLED}, transaction);
+            await cancelBooking({ bookingId: data.bookingId });
             throw new AppError(
                 'The booking has been cancelled due to non-payment within the stipulated time.',
                 StatusCodes.BAD_REQUEST
@@ -89,7 +89,7 @@ async function makePayment(data){
                 StatusCodes.BAD_REQUEST
             );
         }
-        
+
         if(bookingDetails.userId !== data.userId){
             throw new AppError(
                 'User not authorized to make payment',
@@ -106,8 +106,44 @@ async function makePayment(data){
     }       
 }
 
+async function cancelBooking(data){
+    const transaction = await db.sequelize.transaction();
+    try {
+        const bookingDetails = await bookingRepository.get(data.bookingId, transaction);
+
+        console.log("Booking details in cancellation", bookingDetails);
+
+        if(bookingDetails.status == CANCELLED){
+            await transaction.commit();
+            return true;
+        }
+
+        await axios.patch(
+            `${ServerConfig.FLIGHT_API_URL}/api/v1/flights/${bookingDetails.flightId}/seats`,
+            {
+                seats: bookingDetails.noOfSeats,
+                dec : 0
+            }
+        );
+
+        await bookingRepository.update(
+            data.bookingId,
+            {status: CANCELLED},
+            transaction
+        );
+
+        await transaction.commit();
+        return true;
+
+    } catch (error) {
+        await transaction.rollback();
+        throw error;
+    }
+}
+
 
 module.exports = {
     createBooking,
-    makePayment
+    makePayment,
+    cancelBooking
 };
