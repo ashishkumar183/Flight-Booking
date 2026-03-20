@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { StatusCodes } = require('http-status-codes');
-
+const { Op } = require('sequelize');
 const { BookingRepository } = require('../repositories');
 const { ServerConfig } = require('../config');
 const db = require('../models');
@@ -65,7 +65,7 @@ async function makePayment(data){
     try {
         const bookingDetails = await bookingRepository.get(data.bookingId, transaction);
 
-        if(bookingDetails.status == CANCELLED){
+        if(bookingDetails.status === CANCELLED){
             throw new AppError(
                 'The booking has been cancelled. Cannot make payment for a cancelled booking.',
                 StatusCodes.BAD_REQUEST
@@ -90,7 +90,7 @@ async function makePayment(data){
             );
         }
 
-        if(bookingDetails.userId !== data.userId){
+        if(bookingDetails.userId !== Number(data.userId)){
             throw new AppError(
                 'User not authorized to make payment',
                 StatusCodes.UNAUTHORIZED
@@ -113,7 +113,7 @@ async function cancelBooking(data){
 
         console.log("Booking details in cancellation", bookingDetails);
 
-        if(bookingDetails.status == CANCELLED){
+        if(bookingDetails.status === CANCELLED){
             await transaction.commit();
             return true;
         }
@@ -141,9 +141,36 @@ async function cancelBooking(data){
     }
 }
 
+async function cancelOldBookings(){
+    try {
+        const time = new Date(Date.now() - 10 * 60 * 1000); // 10 mins ago
+
+        const oldBookings = await bookingRepository.getAll({
+            createdAt: {
+                [Op.lt]: time
+            },
+            status: {
+    [Op.in]: [PENDING, INITIATED]
+}
+        });
+
+        await Promise.all(
+    oldBookings.map(booking =>
+        cancelBooking({ bookingId: booking.id })
+    )
+);
+
+        return oldBookings;
+
+    } catch (error) {
+        console.log("Error in cancelling old bookings", error);
+        throw error;
+    }
+}
 
 module.exports = {
     createBooking,
     makePayment,
-    cancelBooking
+    cancelBooking,
+    cancelOldBookings
 };
